@@ -159,7 +159,7 @@ where
 /// a `Builder`, which sorts and consolidates on flush.
 pub fn as_recorded_updates<U>(
     arranged: crate::operators::arrange::Arranged<
-        crate::operators::arrange::TraceAgent<Spine<U::Key, U::Val, U::Time, U::Diff>>,
+        crate::operators::arrange::TraceIntra<Spine<U::Key, U::Val, U::Time, U::Diff>>,
     >,
 ) -> crate::Collection<U::Time, RecordedUpdates<U>>
 where

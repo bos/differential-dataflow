@@ -1442,7 +1442,7 @@ impl Server {
 
         // Allow every published trace to compact up to the previous epoch. This
         // is safe even while another program is importing the trace: each
-        // importer is a separate `TraceAgent` whose contribution holds the shared
+        // importer is a separate `TraceInter` whose contribution holds the shared
         // `TraceBox` compaction back to what it still needs (the meet across all
         // handles), so the trace only sheds history no live reader requires.
         //

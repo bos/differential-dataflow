@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::Data;
-use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::operators::arrange::{Arranged, TraceInter};
 use crate::operators::reduce::{ReduceTactic, reduce_with_tactic, sort_dedup};
 use crate::trace::{Span, BatchCursor, BatchDiff, BatchVal, BatchValOwn, Builder, Cursor, Description, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
@@ -27,7 +27,7 @@ type TimeOf<B> = <<B as Navigable>::Cursor as Cursor>::Time;
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,

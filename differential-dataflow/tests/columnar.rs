@@ -6,7 +6,7 @@ use timely::Config;
 
 use differential_dataflow::columnar::collection;
 use differential_dataflow::columnar::trace::{Batcher, Spine};
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::operators::arrange::arrangement::arrange_intra;
 
 type Upd = (u64, (), u64, i64);
 
@@ -26,7 +26,7 @@ fn arrange_reaches_one(config: Config, diffs: &'static [i64]) -> bool {
                 hashfunc: |k: columnar::Ref<'_, u64>| *k,
             };
 
-            arrange_core::<
+            arrange_intra::<
                 _,
                 _,
                 _,

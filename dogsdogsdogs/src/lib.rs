@@ -37,7 +37,7 @@ use timely::dataflow::operators::Concatenate;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceInter;
 
 pub mod operators;
 
@@ -132,8 +132,8 @@ impl<'scope, T: Timestamp, P, E> ValidateExtensionMethod<'scope, T, P, E> for Ve
 // These are all defined here so that users can be assured a common layout.
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
-type TraceValHandle<K,V,T> = TraceAgent<ValSpine<K,V,T,isize>>;
-type TraceKeyHandle<K,T> = TraceAgent<KeySpine<K,T,isize>>;
+type TraceValHandle<K,V,T> = TraceInter<ValSpine<K,V,T,isize>>;
+type TraceKeyHandle<K,T> = TraceInter<KeySpine<K,T,isize>>;
 
 /// The three arrangements a relation must present to extend prefixes.
 ///
@@ -190,15 +190,15 @@ where
     {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
-        let arranged = collection.clone().arrange_by_self();
+        let arranged = collection.clone().arrange_by_self_inter();
         // TODO: This could/should be arrangement to arrangement, via `reduce_abelian`, but the types are a mouthful at the moment.
         let counts = arranged
             .clone()
             .as_collection(|k,_v| k.clone())
             .distinct()
             .map(|(k, _v)| k)
-            .arrange_by_self();
-        let propose = collection.arrange_by_key();
+            .arrange_by_self_inter();
+        let propose = collection.arrange_by_key_inter();
         let validate = arranged;
 
         CollectionIndex {

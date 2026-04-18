@@ -27,7 +27,7 @@ use timely::order::Product;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::input::InputSession;
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::operators::arrange::arrangement::arrange_intra;
 use differential_dataflow::operators::int_proxy::reduce::ProxyReduceTactic;
 use differential_dataflow::operators::int_proxy::vec_backend::VecReduceBackend;
 use differential_dataflow::operators::iterate::Iterate;
@@ -52,7 +52,7 @@ enum Mode {
 macro_rules! harrange {
     ($coll:expr, $t:ty, $name:expr) => {{
         let hashed = $coll.map(|(k, v)| (k.hashed(), (k, v)));
-        arrange_core::<
+        arrange_intra::<
             Pipeline,
             Vec<((u64, (u64, u64)), $t, isize)>,
             _,
@@ -143,7 +143,7 @@ fn run_wide(mode: Mode) -> f64 {
                 }
                 Mode::CursorSame => {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
-                    let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
+                    let arr = arrange_intra::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         _,
                         VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
                     arr.reduce_core::<_, VChunkBuilder<u64, (u64, String), u64, isize>,
@@ -165,7 +165,7 @@ fn run_wide(mode: Mode) -> f64 {
                 }
                 Mode::Proxy => {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
-                    let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
+                    let arr = arrange_intra::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         _,
                         VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
                     reduce_with_tactic::<_, VChunkSpine<u64, (u64, String), u64, isize>, _>(

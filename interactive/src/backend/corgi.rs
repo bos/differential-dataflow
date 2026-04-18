@@ -19,8 +19,8 @@ use differential_dataflow::operators::reduce::{ReduceTactic, reduce_with_tactic}
 use differential_dataflow::trace::Span;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::wrappers::enter::{BatchEnter, TraceEnter};
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::arrangement::arrange_inter;
+use differential_dataflow::operators::arrange::{Arranged, TraceInter};
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher};
 
 use corgi::arrange::gather;
@@ -238,7 +238,7 @@ pub type ImportArr<'scope> = Arranged<'scope, TraceEnter<ExportTrace, Time>>;
 /// The corgi backend's arrangement: one it built, or a published export it imported.
 #[derive(Clone)]
 pub enum Arr<'scope> {
-    Local(Arranged<'scope, TraceAgent<CTrace>>),
+    Local(Arranged<'scope, TraceInter<CTrace>>),
     Imported(ImportArr<'scope>),
 }
 
@@ -380,7 +380,7 @@ impl Backend for CorgiBackend {
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
-        Arr::Local(arrange_core::<_, CC, _, CTrace>(
+        Arr::Local(arrange_inter::<_, CC, _, CTrace>(
             c.inner,
             CorgiPact,
             "CorgiArrange",
@@ -532,11 +532,11 @@ pub fn render_tree_corgi_arranged<'s>(
 
 /// A columnar export: the program's corgi collection, left to the host time and arranged as
 /// corgi chunks.
-pub type ExportTrace = TraceAgent<differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>;
+pub type ExportTrace = TraceInter<differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>;
 
 /// Arrange an export (already at host time) as a columnar trace.
 pub fn arrange_export<'s>(c: Collection<'s, u64, CorgiContainer<u64, Diff>>) -> Arranged<'s, ExportTrace> {
-    arrange_core::<_, CorgiContainer<u64, Diff>, _, differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>(
+    arrange_inter::<_, CorgiContainer<u64, Diff>, _, differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>(
         c.inner,
         CorgiPact,
         "CorgiExport",

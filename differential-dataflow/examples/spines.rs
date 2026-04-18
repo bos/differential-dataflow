@@ -82,7 +82,7 @@ fn main() {
                     use differential_dataflow::columnar::trace::{Spine, ColChunk};
                     use differential_dataflow::trace::chunk::ChunkBatcher;
                     use differential_dataflow::batcher::merge::chunker::ContainerChunker;
-                    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+                    use differential_dataflow::operators::arrange::arrangement::arrange_intra;
                     use timely::dataflow::channels::pact::Exchange;
 
                     let (data_input, data) = scope.new_collection::<String, isize>();
@@ -94,8 +94,8 @@ fn main() {
                     type Ba = ChunkBatcher<Chu, ColChunk<(String, (), u64, isize)>>;
                     type Sp = Spine<String, (), u64, isize>;
                     let exchange = || Exchange::new(|u: &((String, ()), u64, isize)| (u.0).0.hashed().into());
-                    let data = arrange_core::<_, _, Ba, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
-                    let keys = arrange_core::<_, _, Ba, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
+                    let data = arrange_intra::<_, _, Ba, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
+                    let keys = arrange_intra::<_, _, Ba, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
                     // `ColChunk`'s cursor yields `Val = columnar::Ref<()> = ()`, not `&()`.
                     keys.join_core(data, |_k, _, _| Option::<()>::None)
                         .probe_with(&mut probe);
@@ -107,7 +107,7 @@ fn main() {
                     // harness via a `ContainerChunker<VecChunk>`.
                     use differential_dataflow::Hashable;
                     use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkSpine};
-                    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+                    use differential_dataflow::operators::arrange::arrangement::arrange_intra;
                     use timely::dataflow::channels::pact::Exchange;
 
                     let (data_input, data) = scope.new_collection::<String, isize>();
@@ -118,8 +118,8 @@ fn main() {
                     type Ba = ChunkBatcher<String, (), u64, isize>;
                     type Sp = ChunkSpine<String, (), u64, isize>;
                     let exchange = || Exchange::new(|u: &((String, ()), u64, isize)| (u.0).0.hashed().into());
-                    let data = arrange_core::<_, _, Ba, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
-                    let keys = arrange_core::<_, _, Ba, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
+                    let data = arrange_intra::<_, _, Ba, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
+                    let keys = arrange_intra::<_, _, Ba, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                     Workload { data_input, keys_input }

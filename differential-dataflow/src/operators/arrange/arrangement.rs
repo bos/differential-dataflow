@@ -27,6 +27,7 @@ use timely::progress::Antichain;
 use timely::container::PushInto;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Stamp;
+use timely::progress::operate::FrontierInterest;
 
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
@@ -37,7 +38,7 @@ use crate::trace::{self, Description, SpanOf, Trace, TraceReader, Navigable, Bui
 
 use trace::wrappers::enter::{TraceEnter, enter_span};
 
-use super::TraceAgent;
+use super::{TraceIntra, TraceInter};
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -251,7 +252,7 @@ use crate::difference::Abelian;
 use crate::trace::implementations::containers::BatchContainer;
 impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+    pub fn reduce_abelian<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
     where
         Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
@@ -272,7 +273,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+    pub fn reduce_core<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
     where
         Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
@@ -302,17 +303,80 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     }
 }
 
-/// Arranges a stream of updates by a key, configured with a name and a parallelization contract.
+impl<'scope, Tr> Arranged<'scope, TraceInter<Tr>>
+where
+    Tr: TraceReader,
+{
+    /// Converts an inter-dataflow trace to an intra-dataflow trace.
+    ///
+    /// This method is used primarily to harmonize types. It only unwraps the trace and discards
+    /// its ability to be imported into dataflows. It does not improve or alter the scheduling of
+    /// the backing dataflow operator. To get the improved scheduling, use `arrange_intra` instead.
+    pub fn into_intra(self) -> Arranged<'scope, TraceIntra<Tr>> {
+        Arranged {
+            stream: self.stream,
+            trace: self.trace.into_intra(),
+        }
+    }
+}
+
+/// Arranges a stream of updates into a trace that can be imported into other dataflows.
+///
+/// The returned `TraceInter` can be shared across dataflows via `import`. Because this
+/// requires propagating frontier advances outward even without data, the operator must be
+/// continually scheduled, which adds scheduling overhead. Use `arrange_intra` if the trace
+/// will only be consumed within the producing dataflow.
+pub fn arrange_inter<'scope, P, C, Ba, Tr>(
+    stream: Stream<'scope, Tr::Time, C>,
+    pact: P,
+    name: &str,
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
+) -> Arranged<'scope, TraceInter<Tr>>
+where
+    C: Container + Clone + 'static,
+    P: ParallelizationContract<Tr::Time, C>,
+    Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
+    Tr: Trace+'static,
+{
+    arrange_core::<P, C, Ba, Tr>(stream, pact, name, batcher, FrontierInterest::Always)
+}
+
+/// Arranges a stream of updates into a trace scoped to the producing dataflow.
+///
+/// The returned `TraceIntra` can be shared by operators within the same dataflow, but it
+/// cannot be imported into other dataflows (it has no `import` method). In exchange, the
+/// operator is only scheduled when it holds capabilities, reducing scheduling overhead.
+pub fn arrange_intra<'scope, P, C, Ba, Tr>(
+    stream: Stream<'scope, Tr::Time, C>,
+    pact: P,
+    name: &str,
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
+) -> Arranged<'scope, TraceIntra<Tr>>
+where
+    C: Container + Clone + 'static,
+    P: ParallelizationContract<Tr::Time, C>,
+    Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
+    Tr: Trace+'static,
+{
+    arrange_core::<P, C, Ba, Tr>(stream, pact, name, batcher, FrontierInterest::IfCapability).into_intra()
+}
+
+/// Arranges a stream of updates by a key, configured with a name, a parallelization contract,
+/// and a frontier interest policy.
 ///
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
+///
+/// This is the general form that both `arrange_inter` and `arrange_intra` delegate to.
+/// The `FrontierInterest` parameter controls when the operator is notified of frontier changes.
 pub fn arrange_core<'scope, P, C, Ba, Tr>(
     stream: Stream<'scope, Tr::Time, C>,
     pact: P,
     name: &str,
     batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
-) -> Arranged<'scope, TraceAgent<Tr>>
+    interest: FrontierInterest,
+) -> Arranged<'scope, TraceInter<Tr>>
 where
     C: Container + Clone + 'static,
     P: ParallelizationContract<Tr::Time, C>,
@@ -334,38 +398,48 @@ where
     // held by the batcher, which may prevents the operator from sending an
     // empty batch.
 
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+    use timely::dataflow::operators::generic::OutputBuilder;
 
-    // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
-    let reader_ref = &mut reader;
+    // fabricate a data-parallel operator that holds capabilities and consults its input frontier
+    // as `interest` directs.
     let scope = stream.scope();
 
-    let stream = stream.unary_frontier(pact, name, move |_capability, info| {
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+    let operator_info = builder.operator_info();
 
-        // Acquire a logger for arrange events.
-        let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+    let mut input = builder.new_input(stream, pact);
+    builder.set_notify_for(0, interest);
+    let (output, arranged) = builder.new_output();
+    let mut output = OutputBuilder::from(output);
 
-        // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = batcher(logger.clone(), info.global_id);
+    // Acquire a logger for arrange events.
+    let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+
+    // Where we will deposit received updates, and from which we extract batches.
+    let mut batcher = batcher(logger.clone(), operator_info.global_id);
+
+    let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
+    let mut empty_trace = Tr::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exertion logic set, install it.
+    if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty_trace.set_exert_logic(exert_logic);
+    }
+
+    let (trace, mut writer) = TraceInter::new(empty_trace, operator_info, logger);
+
+    builder.build(move |_capabilities| {
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
 
-        let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
-        // If there is default exertion logic set, install it.
-        if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
-            empty_trace.set_exert_logic(exert_logic);
-        }
-
-        let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
-
-        *reader_ref = Some(reader_local);
-
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
-        move |(input, frontier), output| {
+        move |frontiers| {
+
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages
@@ -462,5 +536,5 @@ where
         }
     });
 
-    Arranged { stream, trace: reader.unwrap() }
+    Arranged { stream: arranged, trace }
 }

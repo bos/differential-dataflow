@@ -15,7 +15,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::operators::arrange::{Arranged, TraceInter};
 use crate::trace::{Span, ExertionLogic, Trace, TraceReader};
 
 /// Sort and deduplicate a list. Shared by the cursor and proxy tactics, which
@@ -75,7 +75,7 @@ pub use crate::operators::cursor::reduce::reduce_trace;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
@@ -101,7 +101,7 @@ where
                 empty.set_exert_logic(exert_logic);
             }
 
-            let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
+            let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
 
             *result_trace = Some(output_reader.clone());
 
