@@ -13,7 +13,7 @@ use timely::dataflow::Scope;
 use differential_dataflow::{Collection, VecCollection};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::trace::implementations::{ValSpine, ValBuilder};
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, TraceInter};
 use smallvec::SmallVec;
 use smallvec::smallvec as svec;
 
@@ -26,7 +26,7 @@ use crate::ir::{LinearOp, Diff, Time, Value, eval};
 pub type Row = Value;
 /// A rendered collection at the renderer's (inner, dynamic) time.
 pub type Col<'scope> = VecCollection<'scope, Time, (Row, Row), Diff>;
-type Arr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
+type Arr<'scope> = Arranged<'scope, TraceInter<ValSpine<Row, Row, Time, Diff>>>;
 
 /// Append the user-iter coordinate to a value: extend a `Tuple` in place, or
 /// wrap any other value as `(value, iter)`.
@@ -115,7 +115,7 @@ impl Backend for VecBackend {
         render_linear(c, ops, level)
     }
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s> {
-        c.arrange_by_key()
+        c.arrange_by_key_inter()
     }
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
         a.as_collection(|k, v| (k.clone(), v.clone()))

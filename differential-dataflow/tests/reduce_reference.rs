@@ -34,7 +34,7 @@ use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::input::Input;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, TraceIntra};
 use differential_dataflow::operators::reduce::reduce_trace_reference;
 use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
 
@@ -77,13 +77,13 @@ where
 {
     // Bind the input arrangement to an explicitly-typed local so `Tr1` is concrete going into
     // `reduce_trace_reference` (otherwise its output-key bound is checked before the argument pins it).
-    let arranged: Arranged<'scope, TraceAgent<ValSpine<K, V, Ti, R>>> =
+    let arranged: Arranged<'scope, TraceIntra<ValSpine<K, V, Ti, R>>> =
         collection.arrange_by_key_named("Arrange: ReduceReference");
 
     // The closure params are annotated to the concrete `&K` / `&V` / owned-output types (rather than
     // left to infer the cursor's `Key<'_>` projection) so the coercion to the user's `&K` logic
     // normalizes here, exactly as the default `reduce_named` gets for free by passing its logic through.
-    reduce_trace_reference::<TraceAgent<ValSpine<K, V, Ti, R>>, ValBuilder<K, V2, Ti, R2>, ValSpine<K, V2, Ti, R2>, _, _>(
+    reduce_trace_reference::<TraceIntra<ValSpine<K, V, Ti, R>>, ValBuilder<K, V2, Ti, R2>, ValSpine<K, V2, Ti, R2>, _, _>(
         arranged,
         "ReduceReference",
         move |key: &K, input: &[(&V, R)], output: &mut Vec<(V2, R2)>, change: &mut Vec<(V2, R2)>| {

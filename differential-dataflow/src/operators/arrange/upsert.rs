@@ -113,7 +113,7 @@ use crate::{ExchangeData, Hashable};
 
 use crate::trace::implementations::containers::BatchContainer;
 
-use super::TraceAgent;
+use super::TraceInter;
 
 /// Arrange data from a stream of keyed upserts.
 ///
@@ -128,7 +128,7 @@ use super::TraceAgent;
 pub fn arrange_from_upsert<'scope, Bu, Tr, K, V>(
     stream: Stream<'scope, Tr::Time, Vec<(K, Option<V>, Tr::Time)>>,
     name: &str,
-) -> Arranged<'scope, TraceAgent<Tr>>
+) -> Arranged<'scope, TraceInter<Tr>>
 where
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
@@ -140,7 +140,7 @@ where
     >,
     Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output = Tr::Batch>,
 {
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    let mut reader: Option<TraceInter<Tr>> = None;
 
     // fabricate a data-parallel operator using the `unary_notify` pattern.
     let stream = {
@@ -165,7 +165,7 @@ where
                 empty_trace.set_exert_logic(exert_logic);
             }
 
-            let (mut reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+            let (mut reader_local, mut writer) = TraceInter::new(empty_trace, info, logger);
             // Capture the reader outside the builder scope.
             *reader = Some(reader_local.clone());
 

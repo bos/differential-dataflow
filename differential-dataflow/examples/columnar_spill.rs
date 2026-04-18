@@ -54,7 +54,7 @@ use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Builder as V
 use differential_dataflow::columnar::collection::Builder as ValColBuilder;
 use differential_dataflow::columnar::trace::spill::{self, BytesSource, BytesStore, SpillStats};
 use differential_dataflow::columnar::updates::{Updates, UpdatesTyped};
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::operators::arrange::arrangement::arrange_intra;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
 use timely::dataflow::operators::Input;
@@ -236,7 +236,7 @@ fn run_timely_dataflow(times: u64, keys_per_time: u64, workers: usize, sample_se
 
         worker.dataflow::<u64, _, _>(|scope| {
             let stream = scope.input_from(&mut input);
-            let arranged = arrange_core::<
+            let arranged = arrange_intra::<
                 _, _,
                 ValChunker<(u64, u64, u64, i64)>,
                 ValBatcher<u64, u64, u64, i64>,

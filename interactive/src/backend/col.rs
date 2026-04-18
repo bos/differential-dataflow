@@ -86,7 +86,7 @@ mod render {
     use timely::order::Product;
     use differential_dataflow::Collection;
     use differential_dataflow::dynamic::pointstamp::PointStamp;
-    use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+    use differential_dataflow::operators::arrange::{Arranged, TraceInter};
     use columnar::Columnar;
     use super::types::*;
     use crate::ir::{LinearOp, RowLike, eval_fields, eval_field_into, eval_condition};
@@ -99,7 +99,7 @@ mod render {
     type ConcreteTime = Product<u64, PointStamp<u64>>;
 
     pub type Col<'scope> = Collection<'scope, ConcreteTime, DdirRecordedUpdates>;
-    type Arr<'scope> = Arranged<'scope, TraceAgent<ColValSpine<Row, Row, ConcreteTime, Diff>>>;
+    type Arr<'scope> = Arranged<'scope, TraceInter<ColValSpine<Row, Row, ConcreteTime, Diff>>>;
 
     /// Render a Linear chain: one pass applying the ops in sequence. `level` is
     /// the op's scope depth — it locates the iteration coord for LiftIter and
@@ -223,9 +223,9 @@ mod render {
             render_linear(c, ops, level)
         }
         fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s> {
-            use differential_dataflow::operators::arrange::arrangement::arrange_core;
+            use differential_dataflow::operators::arrange::arrangement::arrange_inter;
             use super::columnar::{ColValBatcher, ColValChunker};
-            arrange_core::<_, _, ColValChunker<(Row,Row,Time,Diff)>, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
+            arrange_inter::<_, _, ColValChunker<(Row,Row,Time,Diff)>, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
         }
         fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
             super::columnar_support::as_recorded_updates::<DdirUpdate>(a)

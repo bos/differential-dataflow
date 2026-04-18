@@ -50,7 +50,7 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use differential_dataflow::VecCollection;
 use differential_dataflow::input::{Input, InputSession};
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceInter;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -64,7 +64,7 @@ pub type OuterTime = u64;
 
 /// A registered, shareable arrangement: the published form of an `export`,
 /// arranged by key at the host time so any later install can `import` it.
-pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
+pub type ServerTrace = TraceInter<ValSpine<Value, Value, OuterTime, Diff>>;
 
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
@@ -300,7 +300,7 @@ impl Server {
 
                 // The second binding point: probe and publish each export's trace.
                 let published: Vec<(String, ServerTrace)> = root.exports.iter().zip(leaved)
-                    .map(|(e, col)| (e.name.clone(), col.probe_with(&probe).arrange_by_key().trace))
+                    .map(|(e, col)| (e.name.clone(), col.probe_with(&probe).arrange_by_key_inter().trace))
                     .collect();
 
                 (published, inputs)
@@ -341,7 +341,7 @@ impl Server {
         let (trace, mut input): (ServerTrace, ServerInput) =
             worker.dataflow::<OuterTime, _, _>(|outer| {
                 let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
-                let trace = col.probe_with(&probe).arrange_by_key().trace;
+                let trace = col.probe_with(&probe).arrange_by_key_inter().trace;
                 (trace, handle)
             });
 
@@ -379,7 +379,7 @@ impl Server {
         let (trace, mut input): (ServerTrace, ServerInput) =
             worker.dataflow::<OuterTime, _, _>(|outer| {
                 let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
-                let trace = col.probe_with(&probe).arrange_by_key().trace;
+                let trace = col.probe_with(&probe).arrange_by_key_inter().trace;
                 (trace, handle)
             });
 
@@ -551,7 +551,7 @@ impl Server {
 
         // Allow every published trace to compact up to the previous epoch. This
         // is safe even while another program is importing the trace: each
-        // importer is a separate `TraceAgent` whose contribution holds the shared
+        // importer is a separate `TraceInter` whose contribution holds the shared
         // `TraceBox` compaction back to what it still needs (the meet across all
         // handles), so the trace only sheds history no live reader requires.
         //
