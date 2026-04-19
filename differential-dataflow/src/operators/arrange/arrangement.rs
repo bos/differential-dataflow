@@ -251,8 +251,8 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
 use crate::difference::Abelian;
 use crate::trace::implementations::containers::BatchContainer;
 impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
-    /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    /// A direct implementation of `ReduceCore::reduce_abelian`, producing a `TraceIntra`.
+    pub fn reduce_abelian<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
     where
         Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
@@ -272,8 +272,29 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         }, push)
     }
 
-    /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    /// As `reduce_abelian` but producing a `TraceInter` that can be imported into other dataflows.
+    pub fn reduce_abelian_inter<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    where
+        Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
+        KC: BatchContainer,
+        BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+        for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
+        L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+        P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+    {
+        self.reduce_core_inter::<_,Bu,Tr2,KC,_>(name, move |key, input, output, change| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
+            crate::consolidation::consolidate(change);
+        }, push)
+    }
+
+    /// A direct implementation of `ReduceCore::reduce_core`, producing a `TraceIntra`.
+    pub fn reduce_core<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
     where
         Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
@@ -284,8 +305,24 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
-        use crate::operators::reduce::reduce_trace;
-        reduce_trace::<_,Bu,_,KC,_,_>(self, name, logic, push)
+        use crate::operators::reduce::reduce_trace_intra;
+        reduce_trace_intra::<_,Bu,_,KC,_,_>(self, name, logic, push)
+    }
+
+    /// As `reduce_core` but producing a `TraceInter` that can be imported into other dataflows.
+    pub fn reduce_core_inter<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    where
+        Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
+        KC: BatchContainer,
+        BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+        for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
+        L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+        P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+    {
+        use crate::operators::reduce::reduce_trace_inter;
+        reduce_trace_inter::<_,Bu,_,KC,_,_>(self, name, logic, push)
     }
 }
 

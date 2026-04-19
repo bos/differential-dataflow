@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use timely::dataflow::channels::pact::Pipeline;
+use timely::progress::operate::FrontierInterest;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use timely::dataflow::operators::Probe;
 use timely::order::Product;
@@ -108,6 +109,7 @@ macro_rules! proxy_reduce {
                     }
                 },
             )),
+            FrontierInterest::Always,
         )
     };
 }
@@ -178,6 +180,7 @@ fn run_wide(mode: Mode) -> f64 {
                                 for (w, d) in current.iter() { updates.push((w.clone(), -*d)); }
                             },
                         )),
+                        FrontierInterest::Always,
                     ).stream.probe_with(&mut ph);
                 }
             }

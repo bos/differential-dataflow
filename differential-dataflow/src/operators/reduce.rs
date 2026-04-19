@@ -11,9 +11,9 @@
 
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::progress::operate::FrontierInterest;
 
 use crate::operators::arrange::{Arranged, TraceInter};
 use crate::trace::{Span, ExertionLogic, Trace, TraceReader};
@@ -66,7 +66,7 @@ pub trait ReduceTactic<T, B1, B2> {
     ) -> (Option<Span<T, B2>>, Antichain<T>);
 }
 
-pub use crate::operators::cursor::reduce::reduce_trace;
+pub use crate::operators::cursor::reduce::{reduce_trace, reduce_trace_inter, reduce_trace_intra};
 
 /// Drives a key-wise reduction using a supplied [`ReduceTactic`].
 ///
@@ -75,35 +75,45 @@ pub use crate::operators::cursor::reduce::reduce_trace;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceInter<Tr2>>
+///
+/// The `interest` parameter controls when the operator is notified of frontier changes.
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T, interest: FrontierInterest) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
     T: ReduceTactic<Tr1::Time, Tr1::Batch, Tr2::Batch> + 'static,
 {
-    let mut result_trace = None;
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+    use timely::dataflow::operators::generic::OutputBuilder;
 
-    // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
-    let stream = {
+    // fabricate a data-parallel operator that holds capabilities and consults its input frontier
+    // as `interest` directs.
+    let mut source_trace = trace.trace;
+    let scope = trace.stream.scope();
 
-        let mut source_trace = trace.trace;
-        let result_trace = &mut result_trace;
-        let scope = trace.stream.scope();
-        trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+    let operator_info = builder.operator_info();
 
-            // Acquire a logger for arrange events.
-            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+    let mut input = builder.new_input(trace.stream, Pipeline);
+    builder.set_notify_for(0, interest);
+    let (output_port, stream) = builder.new_output();
+    let mut output_builder = OutputBuilder::from(output_port);
 
-            let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
-            let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
-            // If there is default exert logic set, install it.
-            if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
-                empty.set_exert_logic(exert_logic);
-            }
+    // Acquire a logger for arrange events.
+    let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
-            let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
+    let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
+    let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exert logic set, install it.
+    if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty.set_exert_logic(exert_logic);
+    }
 
-            *result_trace = Some(output_reader.clone());
+    let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
+
+    let result_trace = output_reader.clone();
+
+    builder.build(move |_capabilities| {
 
             // Capabilities for the lower envelope of the interesting times the operator holds.
             let mut capabilities = CapabilitySet::<Tr1::Time>::default();
@@ -112,7 +122,11 @@ where
             let mut upper_limit = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
             let mut lower_limit = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
 
-            move |(input, frontier), output| {
+            move |frontiers| {
+
+                let frontier = &frontiers[0];
+                let mut output_session = output_builder.activate();
+                let output = &mut output_session;
 
                 // The operator receives input batches, which it treats as contiguous and will collect and
                 // then process as one batch. It captures the input frontier from the batches, from the upstream
@@ -199,9 +213,7 @@ where
                 // Exert trace maintenance if we have been so requested.
                 output_writer.exert();
             }
-        }
-    )
-    };
+    });
 
-    Arranged { stream, trace: result_trace.unwrap() }
+    Arranged { stream, trace: result_trace }
 }

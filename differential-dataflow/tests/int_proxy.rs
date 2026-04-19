@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::progress::operate::FrontierInterest;
 use timely::dataflow::operators::ToStream;
 use timely::order::Product;
 use timely::progress::{Antichain, Timestamp};
@@ -139,7 +140,7 @@ fn proxy_matches_mainline(updates: Vec<((u64, u64), u64, i64)>, window: usize) {
             let coll = updates.clone().to_stream(scope).as_collection();
             let hashed = coll.clone().map(|(k, v)| (k.hashed(), (k, v)));
             let arr = arrange_intra::<Pipeline, Vec<((u64, (u64, u64)), u64, i64)>, _, VChunkSpine<u64, (u64, u64), u64, i64>>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new);
-            reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), u64, i64>, _>(arr, "VecReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, window)))
+            reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), u64, i64>, _>(arr, "VecReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, window)), FrontierInterest::Always)
                 .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
                 .inspect(move |(d, t, r)| ts.lock().unwrap().push((*d, *t, *r)));
             coll.reduce(|_k, input, output| {
@@ -208,7 +209,7 @@ fn reduce_string_values_matches_mainline() {
                     for (w, d) in current.iter() { updates.push((w.clone(), -*d)); }
                 },
                 1,
-            )))
+            )), FrontierInterest::Always)
                 .as_collection(|_h, kw: &(u64, String)| (kw.0, kw.1.clone()))
                 .inspect(move |(d, t, r)| ts.lock().unwrap().push((d.clone(), *t, *r)));
             coll.reduce(|_k, input, output| {
@@ -236,7 +237,7 @@ fn reduce_inside_iterate() {
             let result = input.iterate(|_scope, inner| {
                 let hashed = inner.map(|(k, v)| (k.hashed(), (k, v)));
                 let arr = arrange_intra::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, _, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrIter", VChunkBatcher::new);
-                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "IterReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 1)))
+                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "IterReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 1)), FrontierInterest::Always)
                     .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
             });
             result.inspect(move |(d, t, r)| os.lock().unwrap().push((*d, *t, *r)));
@@ -311,7 +312,7 @@ fn reduce_collision_inside_iterate() {
             let result = input.iterate(|_scope, inner| {
                 let hashed = inner.map(|(k, v)| (k % 2, (k, v)));
                 let arr = arrange_intra::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, _, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrCollide", VChunkBatcher::new);
-                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "CollideReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, usize::MAX)).with_key_batch_size(1))
+                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "CollideReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, usize::MAX)).with_key_batch_size(1), FrontierInterest::Always)
                     .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
             });
             result.inspect(move |(d, t, r)| os.lock().unwrap().push((*d, *t, *r)));

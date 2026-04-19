@@ -9,6 +9,7 @@
 
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::progress::operate::FrontierInterest;
 use timely::dataflow::operators::generic::Operator;
 use timely::progress::Antichain;
 
@@ -427,8 +428,8 @@ impl Backend for CorgiBackend {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
         let tactic = RetimeReduce(ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone(), shape)).with_key_batch_size(256));
         Arr::Local(match a {
-            Arr::Local(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic),
-            Arr::Imported(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic),
+            Arr::Local(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic, FrontierInterest::Always),
+            Arr::Imported(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic, FrontierInterest::Always),
         })
     }
 

@@ -3,9 +3,10 @@
 use std::marker::PhantomData;
 
 use timely::progress::{Antichain, Timestamp};
+use timely::progress::operate::FrontierInterest;
 
 use crate::Data;
-use crate::operators::arrange::{Arranged, TraceInter};
+use crate::operators::arrange::{Arranged, TraceInter, TraceIntra};
 use crate::operators::reduce::{ReduceTactic, reduce_with_tactic, sort_dedup};
 use crate::trace::{Span, BatchCursor, BatchDiff, BatchVal, BatchValOwn, Builder, Cursor, Description, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
@@ -13,6 +14,44 @@ use crate::trace::implementations::containers::BatchContainer;
 
 /// The time type of the updates' cursor: the time coordinate the tactic works in.
 type TimeOf<B> = <<B as Navigable>::Cursor as Cursor>::Time;
+
+/// A key-wise reduction of values in an input trace, producing a `TraceInter`.
+///
+/// The returned trace can be imported into other dataflows. Use `reduce_trace_intra` if
+/// cross-dataflow import is not needed, to reduce scheduling overhead.
+pub fn reduce_trace_inter<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+where
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
+    Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
+    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+{
+    reduce_trace::<Tr1, Bu, Tr2, KC, L, P>(trace, name, logic, push, FrontierInterest::Always)
+}
+
+/// A key-wise reduction of values in an input trace, producing a `TraceIntra`.
+///
+/// The returned trace cannot be imported into other dataflows (it has no `import` method).
+/// In exchange, the operator is only scheduled when it holds capabilities.
+pub fn reduce_trace_intra<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
+where
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
+    Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
+    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+{
+    reduce_trace::<Tr1, Bu, Tr2, KC, L, P>(trace, name, logic, push, FrontierInterest::IfCapability).into_intra()
+}
 
 /// A key-wise reduction of values in an input trace.
 ///
@@ -27,7 +66,10 @@ type TimeOf<B> = <<B as Navigable>::Cursor as Cursor>::Time;
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+///
+/// The `interest` parameter controls when the operator is notified of frontier changes;
+/// `reduce_trace_inter` and `reduce_trace_intra` are the common wrappers.
+pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P, interest: FrontierInterest) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
@@ -39,7 +81,7 @@ where
     L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
     P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
-    reduce_with_tactic(trace, name, CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+    reduce_with_tactic(trace, name, CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push), interest)
 }
 /// The conventional cursor-based [`ReduceTactic`].
 ///
