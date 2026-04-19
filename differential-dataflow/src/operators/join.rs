@@ -11,7 +11,8 @@ use timely::container::NoopBuilder;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::Stream;
-use timely::dataflow::operators::generic::{Operator, OutputBuilderSession};
+use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
+use timely::progress::operate::FrontierInterest;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
@@ -91,13 +92,26 @@ where
     let mut trace1 = arranged1.trace;
     let mut trace2 = arranged2.trace;
 
-    let scope = arranged1.stream.scope();
-    arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        // Acquire an activator to reschedule the operator when it has unfinished work.
-        use timely::scheduling::Activator;
-        let activations = scope.activations();
-        let activator = Activator::new(info.address, activations);
+    let scope = arranged1.stream.scope();
+    let mut builder = OperatorBuilder::new("Join".to_owned(), scope);
+    let operator_info = builder.operator_info();
+
+    let mut input1 = builder.new_input(arranged1.stream, Pipeline);
+    let mut input2 = builder.new_input(arranged2.stream, Pipeline);
+    builder.set_notify_for(0, FrontierInterest::IfCapability);
+    builder.set_notify_for(1, FrontierInterest::IfCapability);
+    let (output, stream) = builder.new_output::<C>();
+    let mut output_builder = OutputBuilder::<Tr1::Time, NoopBuilder<C>>::from(output);
+
+    // Acquire an activator to reschedule the operator when it has unfinished work.
+    use timely::scheduling::Activator;
+    let activations = scope.activations();
+    let activator = Activator::new(operator_info.address, activations);
+
+    builder.build(move |mut capabilities| {
+        let capability = capabilities.remove(0);
 
         // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
         // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as
@@ -175,7 +189,12 @@ where
         let mut trace1_option = Some(trace1);
         let mut trace2_option = Some(trace2);
 
-        move |(input1, frontier1), (input2, frontier2), output| {
+        move |frontiers| {
+
+            let frontier1 = &frontiers[0];
+            let frontier2 = &frontiers[1];
+            let mut output_session = output_builder.activate();
+            let output = &mut output_session;
 
             // 1. Consuming input.
             //
@@ -377,7 +396,9 @@ where
                 }
             }
         }
-    })
+    });
+
+    stream
 }
 
 /// Cursor-based join: the conventional [`JoinTactic`] implementation and its per-batch worker.
