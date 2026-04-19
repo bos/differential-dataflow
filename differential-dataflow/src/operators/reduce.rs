@@ -15,11 +15,11 @@ use std::marker::PhantomData;
 
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Arranged, TraceInter};
+use crate::operators::arrange::{Arranged, TraceInter, TraceIntra};
+use timely::progress::operate::FrontierInterest;
 use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
@@ -77,6 +77,44 @@ pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
     ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>);
 }
 
+/// A key-wise reduction of values in an input trace, producing a `TraceInter`.
+///
+/// The returned trace can be imported into other dataflows. Use `reduce_trace_intra` if
+/// cross-dataflow import is not needed, to reduce scheduling overhead.
+pub fn reduce_trace_inter<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+where
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
+    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+{
+    reduce_trace::<Tr1, Bu, Tr2, KC, L, P>(trace, name, logic, push, FrontierInterest::Always)
+}
+
+/// A key-wise reduction of values in an input trace, producing a `TraceIntra`.
+///
+/// The returned trace cannot be imported into other dataflows (it has no `import` method).
+/// In exchange, the operator is only scheduled when it holds capabilities.
+pub fn reduce_trace_intra<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
+where
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
+    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+{
+    reduce_trace::<Tr1, Bu, Tr2, KC, L, P>(trace, name, logic, push, FrontierInterest::IfCapability).into_intra()
+}
+
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
@@ -90,7 +128,10 @@ pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+///
+/// The `interest` parameter controls when the operator is notified of frontier changes;
+/// `reduce_trace_inter` and `reduce_trace_intra` are the common wrappers.
+pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P, interest: FrontierInterest) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
@@ -102,7 +143,7 @@ where
     L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
     P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
-    reduce_with_tactic(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+    reduce_with_tactic(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push), interest)
 }
 
 // The model-derived reference tactic and its entry point live in `mod reference`; re-exported here
@@ -117,35 +158,43 @@ pub use reference::reduce_trace_reference;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `batches_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceInter<Tr2>>
+///
+/// The `interest` parameter controls when the operator is notified of frontier changes.
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T, interest: FrontierInterest) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
     T: ReduceTactic<Tr1::Batch, Tr2::Batch> + 'static,
 {
-    let mut result_trace = None;
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+    use timely::dataflow::operators::generic::OutputBuilder;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
-    let stream = {
+    let mut source_trace = trace.trace;
+    let scope = trace.stream.scope();
 
-        let mut source_trace = trace.trace;
-        let result_trace = &mut result_trace;
-        let scope = trace.stream.scope();
-        trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+    let operator_info = builder.operator_info();
 
-            // Acquire a logger for arrange events.
-            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+    let mut input = builder.new_input(trace.stream, Pipeline);
+    builder.set_notify_for(0, interest);
+    let (output, stream) = builder.new_output();
+    let mut output = OutputBuilder::from(output);
 
-            let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
-            let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
-            // If there is default exert logic set, install it.
-            if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
-                empty.set_exert_logic(exert_logic);
-            }
+    // Acquire a logger for arrange events.
+    let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
-            let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
+    let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
+    let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exert logic set, install it.
+    if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty.set_exert_logic(exert_logic);
+    }
 
-            *result_trace = Some(output_reader.clone());
+    let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
+
+    let result_trace = output_reader.clone();
+
+    builder.build(move |_capabilities| {
 
             // Capabilities for the lower envelope of the interesting times the operator holds.
             let mut capabilities = CapabilitySet::<Tr1::Time>::default();
@@ -154,7 +203,11 @@ where
             let mut upper_limit = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
             let mut lower_limit = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
 
-            move |(input, frontier), output| {
+            move |frontiers| {
+
+                let frontier = &frontiers[0];
+                let mut output_session = output.activate();
+                let output = &mut output_session;
 
                 // The operator receives input batches, which it treats as contiguous and will collect and
                 // then process as one batch. It captures the input frontier from the batches, from the upstream
@@ -247,11 +300,9 @@ where
                 // Exert trace maintenance if we have been so requested.
                 output_writer.exert();
             }
-        }
-    )
-    };
+    });
 
-    Arranged { stream, trace: result_trace.unwrap() }
+    Arranged { stream, trace: result_trace }
 }
 
 /// The conventional cursor-based [`ReduceTactic`].
@@ -851,7 +902,7 @@ pub(crate) mod reference {
         L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
-        reduce_with_tactic(trace, name, ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+        reduce_with_tactic(trace, name, ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push), FrontierInterest::Always)
     }
 
 

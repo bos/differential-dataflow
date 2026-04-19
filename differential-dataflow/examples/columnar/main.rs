@@ -184,7 +184,7 @@ mod reachability {
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.
-            let result_col = as_recorded_updates::<(Node, (), IterTime, Diff)>(result.into_intra());
+            let result_col = as_recorded_updates::<(Node, (), IterTime, Diff)>(result);
 
             variable.set(result_col.clone());
 
